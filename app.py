@@ -102,7 +102,7 @@ def create_rag(video_url):
     chunks = splitter.create_documents([transcript])
 
     embeddings = GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001"
+        model="models/gemini-embedding-2"
     )
 
     vector_store = FAISS.from_documents(
