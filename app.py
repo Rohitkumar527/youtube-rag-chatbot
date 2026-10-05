@@ -1,9 +1,9 @@
 import os
 import re
+import requests
 import streamlit as st
 
 from dotenv import load_dotenv
-from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -21,7 +21,11 @@ st.set_page_config(
 st.title("🎥 YouTube RAG Chatbot")
 
 if not os.getenv("GOOGLE_API_KEY"):
-    st.error("GOOGLE_API_KEY not found in .env file")
+    st.error("GOOGLE_API_KEY not found")
+    st.stop()
+
+if not os.getenv("SUPADATA_API_KEY"):
+    st.error("SUPADATA_API_KEY not found")
     st.stop()
 
 
@@ -35,10 +39,51 @@ def extract_video_id(url):
 
     for pattern in patterns:
         match = re.search(pattern, url)
+
         if match:
             return match.group(1)
 
     return None
+
+
+def get_transcript(video_url):
+    response = requests.get(
+        "https://api.supadata.ai/v1/transcript",
+        params={
+            "url": video_url,
+            "lang": "en"
+        },
+        headers={
+            "x-api-key": os.getenv("SUPADATA_API_KEY")
+        },
+        timeout=60
+    )
+
+    if not response.ok:
+        try:
+            error_data = response.json()
+            message = error_data.get("message", response.text)
+        except:
+            message = response.text
+
+        raise Exception(f"Transcript API error: {message}")
+
+    data = response.json()
+
+    content = data.get("content")
+
+    if not content:
+        raise Exception("Transcript not available for this video")
+
+    if isinstance(content, list):
+        transcript = " ".join(
+            item.get("text", "")
+            for item in content
+        )
+    else:
+        transcript = content
+
+    return transcript
 
 
 def create_rag(video_url):
@@ -47,15 +92,7 @@ def create_rag(video_url):
     if not video_id:
         raise Exception("Invalid YouTube URL")
 
-    try:
-        api = YouTubeTranscriptApi()
-        transcript_list = api.fetch(video_id, languages=["en"])
-        transcript = " ".join(
-            chunk.text for chunk in transcript_list
-        )
-
-    except TranscriptsDisabled:
-        raise Exception("Captions are not available for this video")
+    transcript = get_transcript(video_url)
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
@@ -65,7 +102,7 @@ def create_rag(video_url):
     chunks = splitter.create_documents([transcript])
 
     embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/gemini-embedding-001"
+        model="models/embedding-001"
     )
 
     vector_store = FAISS.from_documents(
@@ -79,7 +116,7 @@ def create_rag(video_url):
     )
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.8-flash",
+        model="gemini-2.5-flash",
         temperature=0.2
     )
 
